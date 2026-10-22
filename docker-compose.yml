@@ -1,0 +1,17 @@
+# 一键启动：项目本体 + Prometheus 监控
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      # 阿里云百炼 API 密钥，从宿主机的同名环境变量传入
+      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY:-}
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      # 挂载本目录的抓取配置
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro

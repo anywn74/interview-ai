@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>成绩统计 - AI 智能面试助手</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body class="bg-light">
+
+<nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+  <div class="container">
+    <a class="navbar-brand" href="/">AI 智能面试助手</a>
+    <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#main-nav" aria-controls="main-nav" aria-expanded="false" aria-label="展开导航">
+      <span class="navbar-toggler-icon"></span>
+    </button>
+    <div class="collapse navbar-collapse" id="main-nav">
+      <ul class="navbar-nav me-auto mb-2 mb-lg-0">
+        <li class="nav-item"><a class="nav-link" href="/">AI 问答</a></li>
+        <li class="nav-item"><a class="nav-link" href="/interview">模拟面试</a></li>
+        <li class="nav-item"><a class="nav-link" href="/bank">题库</a></li>
+        <li class="nav-item"><a class="nav-link" href="/bank/new">添加题目</a></li>
+        <li class="nav-item"><a class="nav-link" href="/quiz">模拟测试</a></li>
+        <li class="nav-item" id="nav-stats"><a class="nav-link active" href="/stats">统计</a></li>
+        <li class="nav-item" id="nav-records"><a class="nav-link" href="/records">答题记录</a></li>
+        <li class="nav-item" id="nav-profile"><a class="nav-link" href="/profile">个人中心</a></li>
+      </ul>
+      <a class="btn btn-outline-light btn-sm me-2 mt-2 mt-lg-0" id="nav-login" href="/login">登录</a>
+      <a class="btn btn-light btn-sm me-2 mt-2 mt-lg-0" id="nav-register" href="/register">注册</a>
+      <span class="navbar-text me-2" id="user-info">未登录</span>
+      <button class="btn btn-outline-danger btn-sm mt-2 mt-lg-0" id="nav-logout" onclick="logout()">登出</button>
+    </div>
+  </div>
+</nav>
+
+<div class="container py-4">
+  <div id="stats-area">加载中……</div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<script src="/static/common.js"></script>
+<script>
+// 拉取统计数据：先渲染总览卡片，再用 Chart.js 画分类柱状图与难度饼图
+async function loadStats() {
+  const area = document.getElementById("stats-area");
+  try {
+    // 已登录时只拉取当前用户的统计数据
+    const user = currentUser();
+    let url = "/api/stats";
+    if (user) url = "/api/stats?user_id=" + user.id;
+    const data = await api(url, "GET");
+    const rate = Math.round(data.correct_rate * 10000) / 100;
+    area.innerHTML = "";
+
+    // 总览三张卡片
+    const row = document.createElement("div");
+    row.className = "row mb-3";
+    row.appendChild(buildStatCard("总答题数", String(data.total), "bg-primary"));
+    row.appendChild(buildStatCard("答对题数", String(data.correct), "bg-success"));
+    row.appendChild(buildStatCard("正确率", rate + "%", "bg-info text-dark"));
+    area.appendChild(row);
+
+    if (data.total === 0) {
+      const tip = document.createElement("div");
+      tip.className = "alert alert-secondary";
+      tip.textContent = "还没有答题记录，先去题库或模拟测试答几道题吧。";
+      area.appendChild(tip);
+      return;
+    }
+
+    // 图表区
+    const chartRow = document.createElement("div");
+    chartRow.className = "row";
+
+    const barCol = document.createElement("div");
+    barCol.className = "col-md-7 mb-3";
+    const barCard = document.createElement("div");
+    barCard.className = "card h-100";
+    const barHead = document.createElement("div");
+    barHead.className = "card-header";
+    barHead.textContent = "各分类答题情况";
+    const barBody = document.createElement("div");
+    barBody.className = "card-body";
+    const barCanvas = document.createElement("canvas");
+    barCanvas.id = "chart-category";
+    barBody.appendChild(barCanvas);
+    barCard.appendChild(barHead);
+    barCard.appendChild(barBody);
+    barCol.appendChild(barCard);
+    chartRow.appendChild(barCol);
+
+    const pieCol = document.createElement("div");
+    pieCol.className = "col-md-5 mb-3";
+    const pieCard = document.createElement("div");
+    pieCard.className = "card h-100";
+    const pieHead = document.createElement("div");
+    pieHead.className = "card-header";
+    pieHead.textContent = "各难度答题占比";
+    const pieBody = document.createElement("div");
+    pieBody.className = "card-body";
+    const pieCanvas = document.createElement("canvas");
+    pieCanvas.id = "chart-difficulty";
+    pieBody.appendChild(pieCanvas);
+    pieCard.appendChild(pieHead);
+    pieCard.appendChild(pieBody);
+    pieCol.appendChild(pieCard);
+    chartRow.appendChild(pieCol);
+
+    area.appendChild(chartRow);
+
+    // 柱状图：每分类的答题数 vs 答对数
+    new Chart(document.getElementById("chart-category"), {
+      type: "bar",
+      data: {
+        labels: data.by_category.map(function (x) { return x.name; }),
+        datasets: [
+          { label: "答题数", data: data.by_category.map(function (x) { return x.answered; }), backgroundColor: "#0d6efd" },
+          { label: "答对数", data: data.by_category.map(function (x) { return x.correct; }), backgroundColor: "#198754" }
+        ]
+      },
+      options: {
+        scales: { y: { beginAtZero: true, ticks: { precision: 0 } } }
+      }
+    });
+
+    // 饼图：各难度答题数占比
+    new Chart(document.getElementById("chart-difficulty"), {
+      type: "doughnut",
+      data: {
+        labels: data.by_difficulty.map(function (x) { return x.name; }),
+        datasets: [
+          { data: data.by_difficulty.map(function (x) { return x.answered; }),
+            backgroundColor: ["#198754", "#ffc107", "#dc3545", "#6c757d"] }
+        ]
+      }
+    });
+  } catch (e) {
+    area.textContent = "加载失败：" + e.message;
+  }
+}
+
+// 生成一张统计卡片
+function buildStatCard(title, value, colorClass) {
+  const col = document.createElement("div");
+  col.className = "col-md-4 mb-2";
+  const card = document.createElement("div");
+  card.className = "card text-white " + colorClass;
+  const body = document.createElement("div");
+  body.className = "card-body text-center";
+  const valueEl = document.createElement("h3");
+  valueEl.className = "mb-1";
+  valueEl.textContent = value;
+  const titleEl = document.createElement("div");
+  titleEl.className = "small";
+  titleEl.textContent = title;
+  body.appendChild(valueEl);
+  body.appendChild(titleEl);
+  card.appendChild(body);
+  col.appendChild(card);
+  return col;
+}
+
+// 统计页展示个人答题数据，未登录时跳转到登录页
+requireAuth();
+if (isLoggedIn()) {
+  loadStats();
+}
+</script>
+</body>
+</html>

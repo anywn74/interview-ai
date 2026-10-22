@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+allure-results/
+allure-report/
+locust-report.html
+test-results/
+node_modules/
+.venv/
+venv/
+.env
+*.key
+.vscode/

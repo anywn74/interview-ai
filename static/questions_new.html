@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>添加题目 - AI 智能面试助手</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body class="bg-light">
+
+<nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+  <div class="container">
+    <a class="navbar-brand" href="/">AI 智能面试助手</a>
+    <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#main-nav" aria-controls="main-nav" aria-expanded="false" aria-label="展开导航">
+      <span class="navbar-toggler-icon"></span>
+    </button>
+    <div class="collapse navbar-collapse" id="main-nav">
+      <ul class="navbar-nav me-auto mb-2 mb-lg-0">
+        <li class="nav-item"><a class="nav-link" href="/">AI 问答</a></li>
+        <li class="nav-item"><a class="nav-link" href="/interview">模拟面试</a></li>
+        <li class="nav-item"><a class="nav-link" href="/bank">题库</a></li>
+        <li class="nav-item"><a class="nav-link active" href="/bank/new">添加题目</a></li>
+        <li class="nav-item"><a class="nav-link" href="/quiz">模拟测试</a></li>
+        <li class="nav-item" id="nav-stats"><a class="nav-link" href="/stats">统计</a></li>
+        <li class="nav-item" id="nav-records"><a class="nav-link" href="/records">答题记录</a></li>
+        <li class="nav-item" id="nav-profile"><a class="nav-link" href="/profile">个人中心</a></li>
+      </ul>
+      <a class="btn btn-outline-light btn-sm me-2 mt-2 mt-lg-0" id="nav-login" href="/login">登录</a>
+      <a class="btn btn-light btn-sm me-2 mt-2 mt-lg-0" id="nav-register" href="/register">注册</a>
+      <span class="navbar-text me-2" id="user-info">未登录</span>
+      <button class="btn btn-outline-danger btn-sm mt-2 mt-lg-0" id="nav-logout" onclick="logout()">登出</button>
+    </div>
+  </div>
+</nav>
+
+<div class="container py-4" style="max-width: 640px;">
+  <div class="card">
+    <div class="card-header">添加题目</div>
+    <div class="card-body">
+      <div class="mb-3">
+        <label class="form-label">题目标题</label>
+        <input id="title" class="form-control" placeholder="例如：什么是装饰器">
+      </div>
+      <div class="mb-3">
+        <label class="form-label">分类</label>
+        <input id="category" class="form-control" placeholder="例如：Python">
+      </div>
+      <div class="mb-3">
+        <label class="form-label">难度</label>
+        <select id="difficulty" class="form-select">
+          <option value="简单" selected>简单</option>
+          <option value="中等">中等</option>
+          <option value="困难">困难</option>
+        </select>
+      </div>
+      <div class="mb-3">
+        <label class="form-label">参考答案</label>
+        <textarea id="answer" class="form-control" rows="6" placeholder="输入参考答案"></textarea>
+      </div>
+      <div class="mb-3">
+        <label class="form-label">AI 辅助出题（选填）</label>
+        <input id="ai-topic" class="form-control" placeholder="例如：出一道 Python 中等难度的面试题">
+        <button id="ai-button" type="button" class="btn btn-outline-success mt-2" onclick="askAIQuestion()">AI 帮我出题</button>
+      </div>
+      <button id="save-button" class="btn btn-primary w-100" onclick="doSave()">保存到题库</button>
+      <div id="save-tip" class="alert alert-secondary d-none mt-3 mb-0"></div>
+    </div>
+  </div>
+
+  <div class="card mt-4">
+    <div class="card-header">AI 按岗位批量出题</div>
+    <div class="card-body">
+      <div class="mb-3">
+        <label class="form-label">岗位名称</label>
+        <input id="job-title" class="form-control" placeholder="例如：Python 后端开发工程师" onkeydown="if(event.key==='Enter'){askQuestionsByJob();}">
+      </div>
+      <div class="mb-3">
+        <label class="form-label">岗位描述（JD）</label>
+        <textarea id="job-jd" class="form-control" rows="5" placeholder="粘贴招聘要求，例如：熟悉 FastAPI、SQLAlchemy、编写过接口与自动化测试……"></textarea>
+      </div>
+      <div class="mb-3">
+        <label class="form-label">出题数量（1~10 道）</label>
+        <select id="job-count" class="form-select">
+          <option value="1">1 道</option>
+          <option value="3">3 道</option>
+          <option value="5" selected>5 道</option>
+          <option value="10">10 道</option>
+        </select>
+      </div>
+      <div class="alert alert-light border mb-3 py-2 small text-muted">出题前会先在题库中做向量检索（RAG），把语义最相关的题目作为参考提供给 AI，让新题的风格与难度更贴近题库。</div>
+      <button id="job-button" type="button" class="btn btn-success w-100" onclick="askQuestionsByJob()">AI 批量出题</button>
+      <div id="job-tip" class="alert alert-secondary d-none mt-3 mb-0"></div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="/static/common.js"></script>
+<script>
+// 前端填完整性检查：四个字段都不能为空
+function checkForm() {
+  const title = document.getElementById("title").value.trim();
+  const category = document.getElementById("category").value.trim();
+  const answer = document.getElementById("answer").value.trim();
+  if (title === "" || category === "" || answer === "") {
+    alert("标题、分类、参考答案都不能为空");
+    return false;
+  }
+  return true;
+}
+
+// 提交表单：POST /questions 写入题库
+async function doSave() {
+  const tip = document.getElementById("save-tip");
+  const button = document.getElementById("save-button");
+  if (!checkForm()) return;
+  if (button.disabled) return; // 保存请求进行中，防止重复提交
+  const body = {
+    title: document.getElementById("title").value.trim(),
+    category: document.getElementById("category").value.trim(),
+    difficulty: document.getElementById("difficulty").value,
+    answer: document.getElementById("answer").value.trim()
+  };
+  button.disabled = true;
+  button.textContent = "保存中……";
+  try {
+    const data = await api("/questions", "POST", body);
+    tip.className = "alert alert-success mt-3 mb-0";
+    tip.textContent = "保存成功，题目 id：" + data.id + "，正在跳转到题库页……";
+    setTimeout(function () { location.href = "/bank"; }, 1500);
+  } catch (e) {
+    tip.className = "alert alert-danger mt-3 mb-0";
+    tip.textContent = "保存失败：" + e.message;
+    button.disabled = false;
+    button.textContent = "保存到题库";
+  }
+}
+
+// AI 帮我出题：调用 AI 接口生成题目并自动填入表单
+async function askAIQuestion() {
+  const topic = document.getElementById("ai-topic").value.trim();
+  const button = document.getElementById("ai-button");
+  const tip = document.getElementById("save-tip");
+  tip.className = "alert alert-secondary mt-3 mb-0";
+  if (topic === "") {
+    tip.textContent = "请先输入出题要求，例如：一道 Python 中等难度的面试题";
+    return;
+  }
+  button.disabled = true;
+  button.textContent = "AI 出题中……";
+  tip.textContent = "AI 正在生成题目，请稍候……";
+  try {
+    const data = await api("/ask-question", "POST", { topic: topic });
+    document.getElementById("title").value = data.title;
+    document.getElementById("category").value = data.category;
+    document.getElementById("difficulty").value = data.difficulty;
+    document.getElementById("answer").value = data.answer;
+    tip.className = "alert alert-success mt-3 mb-0";
+    tip.textContent = "AI 已生成题目并自动写入题库（id " + data.id + "），即将跳转到题库页……";
+    setTimeout(function () { location.href = "/bank"; }, 2000);
+  } catch (e) {
+    tip.className = "alert alert-danger mt-3 mb-0";
+    tip.textContent = "AI 出题失败：" + e.message;
+  } finally {
+    button.disabled = false;
+    button.textContent = "AI 帮我出题";
+  }
+}
+
+// AI 按岗位批量出题：调用 /ask-questions 生成多道题目并自动写入题库
+async function askQuestionsByJob() {
+  const button = document.getElementById("job-button");
+  const tip = document.getElementById("job-tip");
+  const jobTitle = document.getElementById("job-title").value.trim();
+  const jd = document.getElementById("job-jd").value.trim();
+  const count = parseInt(document.getElementById("job-count").value, 10);
+  tip.className = "alert alert-secondary mt-3 mb-0";
+  if (jobTitle === "" || jd === "") {
+    tip.textContent = "请填写岗位名称和岗位描述";
+    return;
+  }
+  button.disabled = true;
+  button.textContent = "AI 出题中……";
+  tip.textContent = "AI 正在按岗位批量出题，请稍候（约 30~120 秒）……";
+  try {
+    const data = await api("/ask-questions", "POST", { job_title: jobTitle, jd: jd, count: count });
+    tip.className = "alert alert-success mt-3 mb-0";
+    let msg = "出题完成：成功写入 " + data.created.length + " 道";
+    if (data.skipped.length > 0) {
+      msg += "，跳过重复 " + data.skipped.length + " 道";
+    }
+    tip.textContent = msg + "，即将跳转到题库页……";
+    setTimeout(function () { location.href = "/bank"; }, 2500);
+  } catch (e) {
+    tip.className = "alert alert-danger mt-3 mb-0";
+    tip.textContent = "批量出题失败：" + e.message;
+  } finally {
+    button.disabled = false;
+    button.textContent = "AI 批量出题";
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>个人中心 - AI 智能面试助手</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body class="bg-light">
+
+<nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+  <div class="container">
+    <a class="navbar-brand" href="/">AI 智能面试助手</a>
+    <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#main-nav" aria-controls="main-nav" aria-expanded="false" aria-label="展开导航">
+      <span class="navbar-toggler-icon"></span>
+    </button>
+    <div class="collapse navbar-collapse" id="main-nav">
+      <ul class="navbar-nav me-auto mb-2 mb-lg-0">
+        <li class="nav-item"><a class="nav-link" href="/">AI 问答</a></li>
+        <li class="nav-item"><a class="nav-link" href="/interview">模拟面试</a></li>
+        <li class="nav-item"><a class="nav-link" href="/bank">题库</a></li>
+        <li class="nav-item"><a class="nav-link" href="/bank/new">添加题目</a></li>
+        <li class="nav-item"><a class="nav-link" href="/quiz">模拟测试</a></li>
+        <li class="nav-item" id="nav-stats"><a class="nav-link" href="/stats">统计</a></li>
+        <li class="nav-item" id="nav-records"><a class="nav-link" href="/records">答题记录</a></li>
+        <li class="nav-item" id="nav-profile"><a class="nav-link active" href="/profile">个人中心</a></li>
+      </ul>
+      <a class="btn btn-outline-light btn-sm me-2 mt-2 mt-lg-0" id="nav-login" href="/login">登录</a>
+      <a class="btn btn-light btn-sm me-2 mt-2 mt-lg-0" id="nav-register" href="/register">注册</a>
+      <span class="navbar-text me-2" id="user-info">未登录</span>
+      <button class="btn btn-outline-danger btn-sm mt-2 mt-lg-0" id="nav-logout" onclick="logout()">登出</button>
+    </div>
+  </div>
+</nav>
+
+<div class="container py-4" style="max-width: 480px;">
+  <div class="card mb-4">
+    <div class="card-header">我的资料</div>
+    <div class="card-body">
+      <p class="mb-1">用户名：<strong id="profile-name"></strong></p>
+      <p class="mb-0 text-muted small">用户 id：<span id="profile-id"></span></p>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">修改密码</div>
+    <div class="card-body">
+      <div class="mb-3">
+        <label class="form-label">原密码</label>
+        <input id="old-password" type="password" class="form-control" placeholder="输入当前密码" onkeydown="if(event.key==='Enter'){doChangePassword();}">
+      </div>
+      <div class="mb-3">
+        <label class="form-label">新密码</label>
+        <input id="new-password" type="password" class="form-control" placeholder="输入新密码" onkeydown="if(event.key==='Enter'){doChangePassword();}">
+      </div>
+      <button id="change-button" class="btn btn-primary w-100" onclick="doChangePassword()">确认修改</button>
+      <div id="change-tip" class="alert alert-warning d-none mt-3 mb-0"></div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="/static/common.js"></script>
+<script>
+// 个人数据页：未登录直接跳转登录页
+requireAuth();
+
+// 页面打开时把当前登录用户信息填进资料卡片
+(function fillProfile() {
+  const user = currentUser();
+  if (!user) return;
+  document.getElementById("profile-name").textContent = user.name;
+  document.getElementById("profile-id").textContent = user.id;
+})();
+
+// 提交修改密码：校验通过后提示成功并重新登录
+async function doChangePassword() {
+  const user = currentUser();
+  const oldPassword = document.getElementById("old-password").value;
+  const newPassword = document.getElementById("new-password").value;
+  const tip = document.getElementById("change-tip");
+  const button = document.getElementById("change-button");
+  if (!user) {
+    location.href = "/login";
+    return;
+  }
+  if (oldPassword === "" || newPassword === "") {
+    tip.className = "alert alert-warning mt-3 mb-0";
+    tip.textContent = "原密码和新密码都不能为空";
+    return;
+  }
+  if (button.disabled) return; // 修改请求进行中，防止重复提交
+  button.disabled = true;
+  button.textContent = "修改中……";
+  try {
+    await api("/change-password", "POST", {
+      username: user.name,
+      old_password: oldPassword,
+      new_password: newPassword
+    });
+    tip.className = "alert alert-success mt-3 mb-0";
+    tip.textContent = "密码修改成功，请使用新密码重新登录";
+    // 清除本地登录态，1.2 秒后跳转登录页
+    setTimeout(function () {
+      localStorage.removeItem("interview_ai_user");
+      location.href = "/login";
+    }, 1200);
+  } catch (e) {
+    tip.className = "alert alert-danger mt-3 mb-0";
+    tip.textContent = "修改失败：" + e.message;
+    button.disabled = false;
+    button.textContent = "确认修改";
+  }
+}
+</script>
+</body>
+</html>

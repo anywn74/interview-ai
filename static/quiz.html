@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>模拟测试 - AI 智能面试助手</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body class="bg-light">
+
+<nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+  <div class="container">
+    <a class="navbar-brand" href="/">AI 智能面试助手</a>
+    <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#main-nav" aria-controls="main-nav" aria-expanded="false" aria-label="展开导航">
+      <span class="navbar-toggler-icon"></span>
+    </button>
+    <div class="collapse navbar-collapse" id="main-nav">
+      <ul class="navbar-nav me-auto mb-2 mb-lg-0">
+        <li class="nav-item"><a class="nav-link" href="/">AI 问答</a></li>
+        <li class="nav-item"><a class="nav-link" href="/interview">模拟面试</a></li>
+        <li class="nav-item"><a class="nav-link" href="/bank">题库</a></li>
+        <li class="nav-item"><a class="nav-link" href="/bank/new">添加题目</a></li>
+        <li class="nav-item"><a class="nav-link active" href="/quiz">模拟测试</a></li>
+        <li class="nav-item" id="nav-stats"><a class="nav-link" href="/stats">统计</a></li>
+        <li class="nav-item" id="nav-records"><a class="nav-link" href="/records">答题记录</a></li>
+        <li class="nav-item" id="nav-profile"><a class="nav-link" href="/profile">个人中心</a></li>
+      </ul>
+      <a class="btn btn-outline-light btn-sm me-2 mt-2 mt-lg-0" id="nav-login" href="/login">登录</a>
+      <a class="btn btn-light btn-sm me-2 mt-2 mt-lg-0" id="nav-register" href="/register">注册</a>
+      <span class="navbar-text me-2" id="user-info">未登录</span>
+      <button class="btn btn-outline-danger btn-sm mt-2 mt-lg-0" id="nav-logout" onclick="logout()">登出</button>
+    </div>
+  </div>
+</nav>
+
+<div class="container py-4" style="max-width: 760px;">
+  <div class="card mb-3">
+    <div class="card-header">组卷设置</div>
+    <div class="card-body">
+      <div class="row g-2">
+        <div class="col-md-3">
+          <label class="form-label small">题目数量</label>
+          <select id="quiz-count" class="form-select">
+            <option value="3">3 道</option>
+            <option value="5" selected>5 道</option>
+            <option value="10">10 道</option>
+          </select>
+        </div>
+        <div class="col-md-4">
+          <label class="form-label small">分类</label>
+          <select id="quiz-category" class="form-select">
+            <option value="">全部分类</option>
+          </select>
+        </div>
+        <div class="col-md-3">
+          <label class="form-label small">难度</label>
+          <select id="quiz-difficulty" class="form-select">
+            <option value="">全部难度</option>
+            <option value="简单">简单</option>
+            <option value="中等">中等</option>
+            <option value="困难">困难</option>
+          </select>
+        </div>
+        <div class="col-md-2 d-flex align-items-end">
+          <button id="load-button" class="btn btn-primary w-100" onclick="loadQuiz()">组卷</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="quiz-area" class="mb-3">
+    <div class="text-muted small">选择组卷条件后点击「组卷」，系统会随机抽取题目，答完后点「交卷」由 AI 统一批改。</div>
+  </div>
+
+  <div class="card d-none" id="quiz-result">
+    <div class="card-header">测试成绩</div>
+    <div class="card-body">
+      <h5 class="mb-3">答对 <span id="quiz-score" class="badge bg-primary"></span> 题</h5>
+      <div id="quiz-result-list"></div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="/static/common.js"></script>
+<script>
+// 当前这套试卷的题目列表
+let quizQuestions = [];
+
+// 初始化分类下拉选项：从全部题目中收集不重复的分类
+async function initQuizFilters() {
+  const catSelect = document.getElementById("quiz-category");
+  try {
+    const all = await api("/questions", "GET");
+    const categories = [];
+    all.forEach(function (q) {
+      if (q.category && categories.indexOf(q.category) === -1) {
+        categories.push(q.category);
+      }
+    });
+    categories.forEach(function (c) {
+      const opt = document.createElement("option");
+      opt.value = c;
+      opt.textContent = c;
+      catSelect.appendChild(opt);
+    });
+  } catch (e) {
+    // 选项加载失败不影响组卷使用
+  }
+}
+
+// 组卷：把数量/分类/难度拼成查询参数，随机抽取题目渲染成答题卡片
+async function loadQuiz() {
+  const button = document.getElementById("load-button");
+  const area = document.getElementById("quiz-area");
+  const count = parseInt(document.getElementById("quiz-count").value, 10);
+  const category = document.getElementById("quiz-category").value;
+  const difficulty = document.getElementById("quiz-difficulty").value;
+  const params = new URLSearchParams({ random: "1", count: String(count) });
+  if (category) params.append("category", category);
+  if (difficulty) params.append("difficulty", difficulty);
+  button.disabled = true;
+  area.innerHTML = "组卷中……";
+  document.getElementById("quiz-result").classList.add("d-none");
+  try {
+    const questions = await api("/questions?" + params.toString(), "GET");
+    if (questions.length === 0) {
+      area.innerHTML = "";
+      const tip = document.createElement("div");
+      tip.className = "alert alert-warning";
+      tip.textContent = "题库中没有符合条件的题目，请调整条件或先去添加题目。";
+      area.appendChild(tip);
+      quizQuestions = [];
+      return;
+    }
+    quizQuestions = questions;
+    area.innerHTML = "";
+    questions.forEach(function (q, index) {
+      const card = document.createElement("div");
+      card.className = "card mb-3";
+      const head = document.createElement("div");
+      head.className = "card-header";
+      head.textContent = "第 " + (index + 1) + " 题（ID " + q.id + "）" + q.title;
+      head.appendChild(buildBadge(q.category, "bg-secondary", "ms-2"));
+      head.appendChild(buildBadge(q.difficulty, difficultyColor(q.difficulty), "ms-1"));
+      card.appendChild(head);
+      const body = document.createElement("div");
+      body.className = "card-body";
+      const input = document.createElement("textarea");
+      input.className = "form-control";
+      input.id = "quiz-ans-" + q.id;
+      input.rows = 3;
+      input.placeholder = "写下你的答案";
+      body.appendChild(input);
+      card.appendChild(body);
+      area.appendChild(card);
+    });
+    const submitBtn = document.createElement("button");
+    submitBtn.className = "btn btn-success w-100";
+    submitBtn.id = "quiz-submit";
+    submitBtn.textContent = "交卷，AI 统一批改";
+    submitBtn.onclick = submitQuiz;
+    area.appendChild(submitBtn);
+  } catch (e) {
+    area.textContent = "组卷失败：" + e.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+// 生成一个小徽章元素
+function buildBadge(text, colorClass, extraClass) {
+  const badge = document.createElement("span");
+  badge.className = "badge " + colorClass + (extraClass || "");
+  badge.textContent = text;
+  return badge;
+}
+
+// 交卷：收集所有答案交给 /quiz-grade 统一批改，展示总分与每题点评
+async function submitQuiz() {
+  if (quizQuestions.length === 0) {
+    alert("请先组卷");
+    return;
+  }
+  const answers = [];
+  for (let i = 0; i < quizQuestions.length; i++) {
+    const q = quizQuestions[i];
+    const input = document.getElementById("quiz-ans-" + q.id);
+    const text = input.value.trim();
+    if (text === "") {
+      alert("还有题目没有作答，请完成全部题目后再交卷");
+      return;
+    }
+    answers.push({ question_id: q.id, answer: text });
+  }
+  const resultCard = document.getElementById("quiz-result");
+  const resultList = document.getElementById("quiz-result-list");
+  const submitBtn = document.getElementById("quiz-submit");
+  submitBtn.disabled = true; // 批改期间禁用按钮，防止重复交卷
+  submitBtn.textContent = "AI 批改中……";
+  resultList.textContent = "AI 批改中（约 30~120 秒），请勿关闭页面……";
+  resultCard.classList.remove("d-none");
+  try {
+    // 已登录时把 user_id 一起提交，让整卷答题记录归属当前用户
+    const user = currentUser();
+    const body = { answers: answers };
+    if (user) body.user_id = user.id;
+    const data = await api("/quiz-grade", "POST", body);
+    document.getElementById("quiz-score").textContent = data.correct_count + " / " + data.total;
+    resultList.innerHTML = "";
+    data.results.forEach(function (r) {
+      const row = document.createElement("div");
+      row.className = "border rounded p-2 mb-2";
+      const title = document.createElement("div");
+      title.className = "fw-bold";
+      title.textContent = r.question_title;
+      const mark = document.createElement("span");
+      mark.className = "badge ms-2 " + (r.correct === 1 ? "bg-success" : "bg-danger");
+      mark.textContent = r.correct === 1 ? "正确" : "错误";
+      title.appendChild(mark);
+      row.appendChild(title);
+      const detail = document.createElement("div");
+      detail.className = "small text-muted mt-1";
+      detail.textContent = "评分：" + r.score + "｜点评：" + r.comment;
+      row.appendChild(detail);
+      resultList.appendChild(row);
+    });
+    if (data.skipped.length > 0) {
+      const skip = document.createElement("div");
+      skip.className = "small text-warning";
+      skip.textContent = "有 " + data.skipped.length + " 道题目已不存在被跳过";
+      resultList.appendChild(skip);
+    }
+    document.getElementById("quiz-result").scrollIntoView({ behavior: "smooth" });
+  } catch (e) {
+    resultList.textContent = "批改失败：" + e.message;
+  } finally {
+    submitBtn.disabled = false;
+    submitBtn.textContent = "交卷，AI 统一批改";
+  }
+}
+
+// 页面打开时先填充分类选项
+initQuizFilters();
+</script>
+</body>
+</html>
