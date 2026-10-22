@@ -138,7 +138,7 @@ interview-ai/
 ├── docker-compose.yml # 应用 + Prometheus 编排
 ├── prometheus.yml     # Prometheus 抓取配置
 ├── .dockerignore      # 镜像构建忽略清单
-├── app.db             # SQLite 数据库（users/questions/records/vec_questions）
+├── app.db             # SQLite 数据库，首次启动时自动创建（不入库）
 └── static/            # 前端页面（Bootstrap 5 + 原生 JS）
 ```
 

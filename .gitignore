@@ -11,3 +11,5 @@ venv/
 .env
 *.key
 .vscode/
+app.db
+app.db.bak
