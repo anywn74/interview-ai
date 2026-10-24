@@ -79,9 +79,11 @@ async function ssePost(path, body, onChunk) {
   return fullText;
 }
 
-// 登录成功后保存用户信息，多个页面共用同一份登录态
+// 登录成功后保存用户信息，多个页面共用同一份登录态。
+// 登录态存 sessionStorage：只在当前标签页存活，关掉标签页或新开页面即自动登出，
+// 防止别人在这台电脑上打开网站时继承上一个使用者的账号；同一标签页内刷新不丢
 function saveUser(id, name) {
-  localStorage.setItem("interview_ai_user", JSON.stringify({ id: id, name: name }));
+  sessionStorage.setItem("interview_ai_user", JSON.stringify({ id: id, name: name }));
   showUser();
 }
 
@@ -94,7 +96,10 @@ function showUser() {
   const statsLink = document.getElementById("nav-stats");
   const recordsLink = document.getElementById("nav-records");
   const profileLink = document.getElementById("nav-profile");
-  const raw = localStorage.getItem("interview_ai_user");
+  // 「模拟测试」「添加题目」导航项无固定 id，按链接地址找到父级 li 控制显隐
+  const quizLink = document.querySelector('a[href="/quiz"]');
+  const addLink = document.querySelector('a[href="/bank/new"]');
+  const raw = sessionStorage.getItem("interview_ai_user");
   if (raw) {
     const user = JSON.parse(raw);
     if (info) info.textContent = "当前用户：" + user.name + "（id " + user.id + "）";
@@ -104,6 +109,8 @@ function showUser() {
     if (statsLink) statsLink.classList.remove("d-none");
     if (recordsLink) recordsLink.classList.remove("d-none");
     if (profileLink) profileLink.classList.remove("d-none");
+    if (quizLink) quizLink.parentElement.classList.remove("d-none");
+    if (addLink) addLink.parentElement.classList.remove("d-none");
   } else {
     if (info) info.textContent = "未登录";
     if (loginBtn) loginBtn.classList.remove("d-none");
@@ -112,12 +119,14 @@ function showUser() {
     if (statsLink) statsLink.classList.add("d-none");
     if (recordsLink) recordsLink.classList.add("d-none");
     if (profileLink) profileLink.classList.add("d-none");
+    if (quizLink) quizLink.parentElement.classList.add("d-none");
+    if (addLink) addLink.parentElement.classList.add("d-none");
   }
 }
 
 // 读取当前登录用户信息 {id,name}；未登录返回 null
 function currentUser() {
-  const raw = localStorage.getItem("interview_ai_user");
+  const raw = sessionStorage.getItem("interview_ai_user");
   if (!raw) return null;
   try {
     return JSON.parse(raw);
@@ -126,23 +135,23 @@ function currentUser() {
   }
 }
 
-// 判断是否已登录（localStorage 中有用户信息就算登录）
+// 判断是否已登录（sessionStorage 中有用户信息就算登录）
 function isLoggedIn() {
-  return localStorage.getItem("interview_ai_user") !== null;
+  return sessionStorage.getItem("interview_ai_user") !== null;
 }
 
-// 页面级登录守卫：统计/答题记录/个人中心等个人数据页未登录直接跳转登录页
+// 页面级登录守卫：统计/答题记录/个人中心/模拟测试/添加题目等页面未登录直接跳转登录页
 function requireAuth() {
   if (!isLoggedIn()) {
     location.href = "/login";
   }
 }
 
-// 登出：清除本地登录态，导航栏恢复为"未登录"；在个人数据页登出后自动回主页
+// 登出：清除本地登录态，导航栏恢复为"未登录"；在需登录页面登出后自动回主页
 function logout() {
-  localStorage.removeItem("interview_ai_user");
+  sessionStorage.removeItem("interview_ai_user");
   showUser();
-  if (["/stats", "/records", "/profile"].indexOf(location.pathname) !== -1) {
+  if (["/stats", "/records", "/profile", "/quiz", "/bank/new"].indexOf(location.pathname) !== -1) {
     location.href = "/";
   }
 }
@@ -156,26 +165,40 @@ function difficultyColor(difficulty) {
 }
 
 // 筛选下拉框初始化：从全部题目中收集不重复的分类和难度作为选项
+// 分类做归一化：去首尾空格、大小写不敏感归并（Python 与 python 只显示一个）、跳过测试遗留分类、排序后展示
 async function initFilters() {
   const catSelect = document.getElementById("category-select");
   const difSelect = document.getElementById("difficulty-select");
   if (!catSelect && !difSelect) return;
   try {
     const all = await api("/questions", "GET");
-    const categories = [];
+    const catKeyToShow = {}; // 小写键 -> 显示值：大小写不同的同名分类归并为一个
+    const catKeys = [];
     const difficulties = [];
     all.forEach(function (q) {
-      if (q.category && categories.indexOf(q.category) === -1) {
-        categories.push(q.category);
+      if (q.category) {
+        const show = q.category.trim();
+        // 「测试分类_」开头的是自动化测试遗留数据，不在下拉框中展示
+        if (show !== "" && show.indexOf("测试分类_") !== 0) {
+          const key = show.toLowerCase();
+          if (!(key in catKeyToShow)) {
+            catKeyToShow[key] = show;
+            catKeys.push(key);
+          }
+        }
       }
       if (q.difficulty && difficulties.indexOf(q.difficulty) === -1) {
         difficulties.push(q.difficulty);
       }
     });
-    categories.forEach(function (c) {
+    // 按显示值排序（兼容中英文），保证下拉框顺序稳定可预期
+    catKeys.sort(function (a, b) {
+      return catKeyToShow[a].localeCompare(catKeyToShow[b], "zh-Hans-CN");
+    });
+    catKeys.forEach(function (key) {
       const opt = document.createElement("option");
-      opt.value = c;
-      opt.textContent = c;
+      opt.value = catKeyToShow[key];
+      opt.textContent = catKeyToShow[key];
       catSelect.appendChild(opt);
     });
     difficulties.forEach(function (d) {
@@ -193,6 +216,26 @@ async function initFilters() {
 let bankPage = 1;
 const bankPageSize = 10;
 
+// 添加题目成功后跳转到 /bank?new=id，这里保存待定位高亮的题目 id（NaN 表示无）
+let pendingHighlightId = NaN;
+
+// 从地址栏读取 ?new=id 作为待高亮新题，并清理地址栏参数，避免刷新页面时重复高亮
+function readPendingHighlight() {
+  const params = new URLSearchParams(location.search);
+  const id = params.get("new");
+  if (id !== null && id !== "") {
+    const parsed = parseInt(id, 10);
+    if (!isNaN(parsed)) {
+      pendingHighlightId = parsed;
+    }
+  }
+  if (params.has("new")) {
+    params.delete("new");
+    const rest = params.toString();
+    history.replaceState(null, "", location.pathname + (rest ? "?" + rest : ""));
+  }
+}
+
 // 搜索/筛选条件变化时回到第 1 页再重新加载
 function resetAndLoadQuestions() {
   bankPage = 1;
@@ -205,9 +248,23 @@ function changeBankPage(delta) {
   loadQuestions();
 }
 
+// 页码输入框跳转：非法输入忽略，超出范围收敛到 1..totalPages
+function jumpBankPage(page, totalPages) {
+  const target = parseInt(page, 10);
+  if (isNaN(target) || target < 1 || target > totalPages) {
+    return;
+  }
+  bankPage = target;
+  loadQuestions();
+}
+
 // 拉取题目并渲染成手风琴列表（题库页使用，支持搜索、筛选与分页）
 async function loadQuestions() {
   const container = document.getElementById("question-list");
+  // 首次加载前从地址栏读取「添加题目」跳转带来的新题 id（?new=id），用于定位高亮
+  if (isNaN(pendingHighlightId)) {
+    readPendingHighlight();
+  }
   container.textContent = "加载中……";
   try {
     // 读取页面上的搜索框和下拉筛选条件，拼接到查询地址后面
@@ -233,6 +290,12 @@ async function loadQuestions() {
     const questions = result.data;
     const total = parseInt(result.headers.get("X-Total-Count") || String(questions.length), 10);
     const totalPages = Math.max(1, Math.ceil(total / bankPageSize));
+    // 新题永远排在最后一页（后端按 id 升序）：待高亮题目不在当前页时，先跳到最后一页重新加载再定位
+    if (!isNaN(pendingHighlightId) && bankPage < totalPages) {
+      bankPage = totalPages;
+      loadQuestions();
+      return;
+    }
     // 更新题库页右上角的题目数量徽章（页面没有该元素时跳过）
     const countEl = document.getElementById("question-count");
     if (countEl) {
@@ -251,6 +314,24 @@ async function loadQuestions() {
     const pageInfo = document.createElement("span");
     pageInfo.className = "small text-muted";
     pageInfo.textContent = "第 " + bankPage + " / " + totalPages + " 页";
+    // 页码跳转：输入页码按回车或点「跳转」直接翻页
+    const jumpInput = document.createElement("input");
+    jumpInput.type = "number";
+    jumpInput.min = "1";
+    jumpInput.max = String(totalPages);
+    jumpInput.value = String(bankPage);
+    jumpInput.className = "form-control form-control-sm text-center";
+    jumpInput.style.width = "70px";
+    jumpInput.onkeydown = function (event) {
+      if (event.key === "Enter") {
+        jumpBankPage(jumpInput.value, totalPages);
+      }
+    };
+    const jumpBtn = document.createElement("button");
+    jumpBtn.className = "btn btn-sm btn-outline-secondary";
+    jumpBtn.type = "button";
+    jumpBtn.textContent = "跳转";
+    jumpBtn.onclick = function () { jumpBankPage(jumpInput.value, totalPages); };
     const nextBtn = document.createElement("button");
     nextBtn.className = "btn btn-sm btn-outline-secondary";
     nextBtn.type = "button";
@@ -259,6 +340,8 @@ async function loadQuestions() {
     nextBtn.onclick = function () { changeBankPage(1); };
     pager.appendChild(prevBtn);
     pager.appendChild(pageInfo);
+    pager.appendChild(jumpInput);
+    pager.appendChild(jumpBtn);
     pager.appendChild(nextBtn);
     container.appendChild(pager);
     if (questions.length === 0) {
@@ -274,15 +357,23 @@ async function loadQuestions() {
       return;
     }
     questions.forEach(function (q, index) {
+      // 待高亮的新题：命中后清除标记，本题自动展开、加黄色高亮，页面渲染完成后滚动到可见位置
+      const isTarget = q.id === pendingHighlightId;
+      if (isTarget) {
+        pendingHighlightId = NaN;
+      }
       // 手风琴容器
       const item = document.createElement("div");
       item.className = "accordion-item";
+      if (isTarget) {
+        item.classList.add("border-warning", "bg-warning-subtle");
+      }
 
       const head = document.createElement("h2");
       head.className = "accordion-header";
 
       const button = document.createElement("button");
-      button.className = "accordion-button collapsed";
+      button.className = "accordion-button" + (isTarget ? "" : " collapsed");
       button.type = "button";
       button.setAttribute("data-bs-toggle", "collapse");
       button.setAttribute("data-bs-target", "#q-" + q.id);
@@ -302,10 +393,10 @@ async function loadQuestions() {
       head.appendChild(button);
       item.appendChild(head);
 
-      // 手风琴展开区：分类 + 答案
+      // 手风琴展开区：分类 + 答案（待高亮题目渲染时即为展开状态）
       const wrapper = document.createElement("div");
       wrapper.id = "q-" + q.id;
-      wrapper.className = "accordion-collapse collapse";
+      wrapper.className = "accordion-collapse collapse" + (isTarget ? " show" : "");
       wrapper.setAttribute("data-bs-parent", "#question-list");
 
       const body = document.createElement("div");
@@ -369,6 +460,10 @@ async function loadQuestions() {
 
       item.appendChild(wrapper);
       container.appendChild(item);
+      // 高亮的题目滚动到列表可见区域中间，让用户一眼看到刚刚添加的题
+      if (isTarget) {
+        item.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
     });
     // 外层容器需要 accordion 样式类（默认无样式时手动加上）
     if (!container.classList.contains("accordion")) {

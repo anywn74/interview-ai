@@ -240,6 +240,9 @@ async function submitQuiz() {
   }
 }
 
+// 进入页面前先检查登录态，未登录跳转登录页
+requireAuth();
+
 // 页面打开时先填充分类选项
 initQuizFilters();
 </script>

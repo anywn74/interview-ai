@@ -305,11 +305,35 @@ def test_ask_question_duplicate(monkeypatch):
     r1=client.post("/questions",json={"title":title,"category":"Python","difficulty":"简单","answer":"答案"})
     assert r1.status_code==200
     content_holder["content"]=json.dumps({"title":title,"category":"Python","difficulty":"简单","answer":"答案"},ensure_ascii=False)
+    calls=[]
+    def counting_fake(url,headers=None,json=None,timeout=None):
+        calls.append(1)
+        return FakeContentResponse()
     monkeypatch.setenv("DASHSCOPE_API_KEY","假密钥")
-    monkeypatch.setattr("main.httpx.post",fake_post_content)
+    monkeypatch.setattr("main.httpx.post",counting_fake)
     r2=client.post("/ask-question",json={"topic":"出一道 Python 题"})
     assert r2.status_code==409
-    assert r2.json()["detail"]=="题目已存在"
+    assert r2.json()["detail"]=="连续三次生成的题目都与题库重复，请换个出题方向再试"
+    assert len(calls)==3
+
+def test_ask_question_retry_success(monkeypatch):
+    # 第一次生成的标题撞库，第二次换角度生成成功 → 应重试后返回 200
+    title=f"ai_title_{time.time()}"
+    r1=client.post("/questions",json={"title":title,"category":"Python","difficulty":"简单","answer":"答案"})
+    assert r1.status_code==200
+    title2=f"ai_title2_{time.time()}"
+    queue=[
+        json.dumps({"title":title,"category":"Python","difficulty":"简单","answer":"答案"},ensure_ascii=False),
+        json.dumps({"title":title2,"category":"Python","difficulty":"中等","answer":"答案2"},ensure_ascii=False)
+    ]
+    def queue_fake(url,headers=None,json=None,timeout=None):
+        content_holder["content"]=queue.pop(0)
+        return FakeContentResponse()
+    monkeypatch.setenv("DASHSCOPE_API_KEY","假密钥")
+    monkeypatch.setattr("main.httpx.post",queue_fake)
+    r2=client.post("/ask-question",json={"topic":"出一道 Python 题"})
+    assert r2.status_code==200
+    assert r2.json()["title"]==title2
 
 def test_ask_question_missing_key(monkeypatch):
     monkeypatch.delenv("DASHSCOPE_API_KEY",raising=False)
@@ -511,7 +535,8 @@ def test_interview_summary_success(monkeypatch):
     content_holder["content"]=json.dumps({"score":"中等偏上","strengths":"基础扎实","weaknesses":"深度不足","advice":"多练习项目"},ensure_ascii=False)
     monkeypatch.setenv("DASHSCOPE_API_KEY","假密钥")
     monkeypatch.setattr("main.httpx.post",fake_post_content)
-    r=client.post("/interview-summary",json={"job_title":"Python工程师","messages":[{"role":"user","content":"你好"},{"role":"assistant","content":"请做个自我介绍"}]})
+    # 消息流：第一条 user 是"面试开始"开场指令，第二条 user 才是真正的回答
+    r=client.post("/interview-summary",json={"job_title":"Python工程师","messages":[{"role":"user","content":"面试开始"},{"role":"assistant","content":"请做个自我介绍"},{"role":"user","content":"我叫小明，有三段实习经历"}]})
     assert r.status_code==200
     assert r.json()["score"]=="中等偏上"
     assert r.json()["strengths"]=="基础扎实"
@@ -522,7 +547,7 @@ def test_interview_summary_bad_format(monkeypatch):
     content_holder["content"]="这不是 JSON"
     monkeypatch.setenv("DASHSCOPE_API_KEY","假密钥")
     monkeypatch.setattr("main.httpx.post",fake_post_content)
-    r=client.post("/interview-summary",json={"job_title":"Python工程师","messages":[{"role":"user","content":"你好"}]})
+    r=client.post("/interview-summary",json={"job_title":"Python工程师","messages":[{"role":"user","content":"面试开始"},{"role":"user","content":"你好"},{"role":"assistant","content":"请做个自我介绍"}]})
     assert r.status_code==502
     assert r.json()["detail"]=="模型未按格式返回"
 
@@ -531,6 +556,17 @@ def test_interview_invalid():
     assert r1.status_code==422
     r2=client.post("/interview-summary",json={"job_title":"Python工程师","messages":[]})
     assert r2.status_code==422
+
+def test_interview_summary_no_answer():
+    # 候选人从未作答时拒绝生成报告，防止模型对空回答编造评分
+    # 场景一：对话里只有面试官消息
+    r1=client.post("/interview-summary",json={"job_title":"Python工程师","messages":[{"role":"assistant","content":"请做个自我介绍"}]})
+    assert r1.status_code==400
+    assert "请至少回答一道题目" in r1.json()["detail"]
+    # 场景二（真实缺陷复现）："面试开始"开场 user 消息 + 面试官第一题，候选人没回答就点结束
+    r2=client.post("/interview-summary",json={"job_title":"Python工程师","messages":[{"role":"user","content":"面试开始，请先问我第一个问题"},{"role":"assistant","content":"请做个自我介绍"}]})
+    assert r2.status_code==400
+    assert "请至少回答一道题目" in r2.json()["detail"]
 
 # ---- 组卷模拟测试与统计（f4）测试 ----
 def test_get_questions_random_and_count():

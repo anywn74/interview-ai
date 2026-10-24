@@ -12,4 +12,5 @@ venv/
 *.key
 .vscode/
 app.db
-app.db.bak
+app.db*
+test_app.db

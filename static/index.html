@@ -69,8 +69,30 @@
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script src="/static/common.js"></script>
 <script>
-// 多轮对话历史：每次发送时把完整历史带给 /ask，模型才能记住上下文
+// 多轮对话历史：每次发送时把完整历史带给 /ask，模型才能记住上下文；
+// 历史按登录账号存进 localStorage，切到别的页面再回来会自动恢复气泡并续答
 let chatHistory = [];
+
+// 当前账号的存储键：对话按用户隔离，换账号登录看不到别人的历史
+function chatKey() {
+  const u = currentUser();
+  return "interview_ai_chat_" + (u ? u.name : "guest");
+}
+
+// 把历史写入 localStorage（发送/收到消息后调用）
+function saveChat() {
+  try { localStorage.setItem(chatKey(), JSON.stringify(chatHistory)); } catch (e) {}
+}
+
+// 从 localStorage 读回历史；数据损坏时按空历史处理
+function loadChat() {
+  try {
+    const arr = JSON.parse(localStorage.getItem(chatKey()) || "[]");
+    chatHistory = Array.isArray(arr) ? arr : [];
+  } catch (e) {
+    chatHistory = [];
+  }
+}
 
 // 往聊天区加一条消息气泡：用户消息蓝色靠右，AI 回复浅灰靠左
 function addBubble(text, who) {
@@ -100,6 +122,7 @@ async function sendMessage() {
   const text = input.value.trim();
   if (text === "") return;
   chatHistory.push({ role: "user", content: text });
+  saveChat();
   addBubble(text, "user");
   input.value = "";
   button.disabled = true;
@@ -124,6 +147,7 @@ async function sendMessage() {
       area.scrollTop = area.scrollHeight;
     });
     chatHistory.push({ role: "assistant", content: answer });
+    saveChat();
   } catch (e) {
     bubble.textContent = "调用失败：" + e.message;
   } finally {
@@ -132,9 +156,10 @@ async function sendMessage() {
   }
 }
 
-// 清空对话历史与聊天区，并补回初始提示语
+// 清空对话历史与聊天区，并补回初始提示语；同时清掉本地保存的历史
 function clearChat() {
   chatHistory = [];
+  try { localStorage.removeItem(chatKey()); } catch (e) {}
   const area = document.getElementById("chat-area");
   area.innerHTML = "";
   const tip = document.createElement("div");
@@ -143,11 +168,61 @@ function clearChat() {
   area.appendChild(tip);
 }
 
+// 页面加载时恢复历史对话：先把所有历史气泡画出来；
+// 若最后一条是用户消息（说明 AI 回复还没写完就被切走），自动重新请求把回复续上
+function restoreChat() {
+  loadChat();
+  chatHistory.forEach(function (m) {
+    if (m && typeof m.content === "string" && m.content) {
+      addBubble(m.content, m.role === "user" ? "user" : "ai");
+    }
+  });
+  if (chatHistory.length > 0 && chatHistory[chatHistory.length - 1].role === "user" && isLoggedIn()) {
+    resumeChat();
+  }
+}
+
+// 续答：带着完整历史重新请求流式接口，AI 从上次没答完的问题继续回答
+async function resumeChat() {
+  const button = document.getElementById("send-button");
+  const area = document.getElementById("chat-area");
+  button.disabled = true;
+  button.textContent = "AI 思考中……";
+  const bubble = document.createElement("div");
+  bubble.className = "alert alert-secondary mb-2 py-2 me-auto";
+  bubble.style.maxWidth = "80%";
+  bubble.style.whiteSpace = "pre-wrap";
+  bubble.textContent = "AI 思考中……";
+  area.appendChild(bubble);
+  area.scrollTop = area.scrollHeight;
+  try {
+    let started = false;
+    const answer = await ssePost("/ask/stream", { messages: chatHistory.slice() }, function (chunk) {
+      if (!started) {
+        bubble.textContent = "";
+        started = true;
+      }
+      bubble.textContent += chunk;
+      area.scrollTop = area.scrollHeight;
+    });
+    chatHistory.push({ role: "assistant", content: answer });
+    saveChat();
+  } catch (e) {
+    bubble.textContent = "调用失败：" + e.message;
+  } finally {
+    button.disabled = false;
+    button.textContent = "发送";
+  }
+}
+
 // 弹出"请先登录"提示框
 function showLoginModal() {
   const el = document.getElementById("login-required-modal");
   bootstrap.Modal.getOrCreateInstance(el).show();
 }
+
+// 页面打开时恢复历史对话（导航登录态由 common.js 末尾的 showUser() 恢复）
+restoreChat();
 </script>
 </body>
 </html>

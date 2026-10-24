@@ -87,10 +87,46 @@
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script src="/static/common.js"></script>
 <script>
-// 面试对话历史：每次发送都把完整历史带给 /interview，面试官才能记住上下文
+// 面试对话历史：每次发送都把完整历史带给 /interview，面试官才能记住上下文；
+// 历史按登录账号存进 localStorage，切到别的页面再回来会自动恢复气泡并续答
 let interviewHistory = [];
 let jobTitle = "";
 let started = false;
+// 面试回答计数器：只有真正点击过「发送回答」才算回答过，用于结束面试时的空回答拦截
+let answeredCount = 0;
+// 开始面试时写入历史的开场消息：恢复历史时跳过渲染，避免出现一条蓝色「用户气泡」
+const OPENING = "面试开始，请先问我第一个问题";
+
+// 当前账号的面试状态存储键：按用户隔离，换账号登录看不到别人的面试
+function stateKey() {
+  const u = currentUser();
+  return "interview_ai_interview_" + (u ? u.name : "guest");
+}
+
+// 把整场面试状态（岗位/进行中标记/回答计数/完整历史）写入 localStorage
+function saveState() {
+  try {
+    localStorage.setItem(stateKey(), JSON.stringify({
+      jobTitle: jobTitle,
+      started: started,
+      answeredCount: answeredCount,
+      interviewHistory: interviewHistory
+    }));
+  } catch (e) {}
+}
+
+// 从 localStorage 读回面试状态；数据损坏时保持默认空状态
+function loadState() {
+  try {
+    const s = JSON.parse(localStorage.getItem(stateKey()) || "null");
+    if (s && typeof s === "object") {
+      jobTitle = s.jobTitle || "";
+      started = !!s.started;
+      answeredCount = s.answeredCount || 0;
+      interviewHistory = Array.isArray(s.interviewHistory) ? s.interviewHistory : [];
+    }
+  } catch (e) {}
+}
 
 // 往面试区加一条消息气泡：我的回答蓝色靠右，面试官提问浅灰靠左
 function addBubble(text, who) {
@@ -150,15 +186,19 @@ async function startInterview() {
   const area = document.getElementById("interview-area");
   area.innerHTML = "";
   interviewHistory = [];
+  answeredCount = 0;
   started = true;
+  saveState();
   const button = document.getElementById("start-button");
   button.disabled = true;
   button.textContent = "面试官思考中……";
   addBubble("面试开始：你应聘的是「" + jobTitle + "」岗位，请等待面试官提问。", "ai");
   try {
-    interviewHistory.push({ role: "user", content: "面试开始，请先问我第一个问题" });
+    interviewHistory.push({ role: "user", content: OPENING });
+    saveState();
     const answer = await askInterviewStream({ job_title: jobTitle, messages: interviewHistory.slice() });
     interviewHistory.push({ role: "assistant", content: answer });
+    saveState();
   } catch (e) {
   } finally {
     button.disabled = false;
@@ -181,6 +221,8 @@ async function sendAnswer() {
   const text = input.value.trim();
   if (text === "") return;
   interviewHistory.push({ role: "user", content: text });
+  answeredCount++;
+  saveState();
   addBubble(text, "user");
   input.value = "";
   button.disabled = true;
@@ -188,6 +230,7 @@ async function sendAnswer() {
   try {
     const answer = await askInterviewStream({ job_title: jobTitle, messages: interviewHistory.slice() });
     interviewHistory.push({ role: "assistant", content: answer });
+    saveState();
   } catch (e) {
   } finally {
     button.disabled = false;
@@ -199,6 +242,13 @@ async function sendAnswer() {
 async function endInterview() {
   if (!started || interviewHistory.length === 0) {
     alert("面试还没开始");
+    return;
+  }
+  // 必须实际回答过至少一题才能生成报告，防止 AI 对空回答编造评分。
+  // 注意：开始面试时 history 里会有一条"面试开始"的开场 user 消息，不能靠消息内容判断，
+  // 用 answeredCount 计数器（只在真正点击发送回答时累加）才是可靠的依据
+  if (answeredCount === 0) {
+    alert("你还没有回答任何问题，请至少回答一道题目后再结束面试");
     return;
   }
   const endButton = document.getElementById("end-button");
@@ -226,6 +276,45 @@ function showLoginModal() {
   const el = document.getElementById("login-required-modal");
   bootstrap.Modal.getOrCreateInstance(el).show();
 }
+
+// 页面加载时恢复整场面试：进行中的面试会重新画出全部气泡（开场消息除外）；
+// 若最后一条是用户消息（面试官点评/追问还没返回就被切走），自动重新请求续上
+function restoreInterview() {
+  loadState();
+  if (!started || interviewHistory.length === 0) return;
+  const area = document.getElementById("interview-area");
+  area.innerHTML = "";
+  document.getElementById("job-title").value = jobTitle;
+  addBubble("面试开始：你应聘的是「" + jobTitle + "」岗位（历史会话已恢复）。", "ai");
+  interviewHistory.forEach(function (m) {
+    if (!m || typeof m.content !== "string" || !m.content) return;
+    if (m.role === "user" && m.content === OPENING) return;
+    addBubble(m.content, m.role === "user" ? "user" : "ai");
+  });
+  const last = interviewHistory[interviewHistory.length - 1];
+  if (last.role === "user" && isLoggedIn()) {
+    resumeInterview();
+  }
+}
+
+// 续答：带着完整历史重新请求流式接口，面试官接着完成上次没答完的点评/追问
+async function resumeInterview() {
+  const button = document.getElementById("send-button");
+  button.disabled = true;
+  button.textContent = "面试官思考中……";
+  try {
+    const answer = await askInterviewStream({ job_title: jobTitle, messages: interviewHistory.slice() });
+    interviewHistory.push({ role: "assistant", content: answer });
+    saveState();
+  } catch (e) {
+  } finally {
+    button.disabled = false;
+    button.textContent = "发送回答";
+  }
+}
+
+// 页面打开时恢复历史面试（导航登录态由 common.js 末尾的 showUser() 恢复）
+restoreInterview();
 </script>
 </body>
 </html>

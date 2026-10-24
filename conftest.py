@@ -5,6 +5,11 @@ import time
 import subprocess
 import pytest
 
+# 测试数据分离：pytest 必须使用独立的测试数据库，避免测试产生的时间戳题目/用户污染真实 app.db。
+# 此行必须在任何测试模块 import main 之前执行（conftest.py 由 pytest 先于测试模块加载，顺序有保障）；
+# 用 setdefault 尊重外部已设的 TEST_DATABASE 值，未设置时默认测试库为 test_app.db
+os.environ.setdefault("TEST_DATABASE", "sqlite:///./test_app.db")
+
 # 系统测试的服务进程：测试开始前拉起 uvicorn 监听 127.0.0.1:8100（避开开发时常用的 8000 端口），
 # 全部测试结束后自动关闭；只有 UI 测试用到这个 fixture，普通接口测试不受影响
 @pytest.fixture(scope="session")

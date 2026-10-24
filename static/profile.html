@@ -102,7 +102,7 @@ async function doChangePassword() {
     tip.textContent = "密码修改成功，请使用新密码重新登录";
     // 清除本地登录态，1.2 秒后跳转登录页
     setTimeout(function () {
-      localStorage.removeItem("interview_ai_user");
+      sessionStorage.removeItem("interview_ai_user");
       location.href = "/login";
     }, 1200);
   } catch (e) {

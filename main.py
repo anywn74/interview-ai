@@ -15,7 +15,10 @@ from prometheus_client import Counter,Histogram,make_asgi_app
 import sqlite_vec
 
 
-engine = create_engine("sqlite:///./app.db")
+# 数据库路径支持环境变量覆盖：pytest 由 conftest.py 设置 TEST_DATABASE 指向独立的测试库，
+# 测试产生的数据全部落在 test_app.db，不再污染真实的 app.db；正常启动服务时不设置该变量
+DATABASE_URL = os.environ.get("TEST_DATABASE", "sqlite:///./app.db")
+engine = create_engine(DATABASE_URL)
 Base = declarative_base()
 
 # 每个新建的 SQLite 连接都要加载 sqlite-vec 扩展，向量表才能正常建表和查询
@@ -410,36 +413,48 @@ def ask_question_stream(a:AskIn):
 
 @app.post("/ask-question")
 def ask_question_ai(q:AskQuestionIn):
-    prompt=(
-        "你是一名面试出题官，请根据下面的要求出一道面试题。"
-        "只输出 JSON，不要输出任何其他文字，格式为："
-        '{"title":"题目标题","category":"分类","difficulty":"简单或中等或困难","answer":"参考答案","tags":"标签1,标签2"}。'
-        "出题要求："+q.topic
-    )
-    content=call_llm([{"role":"user","content":prompt}])
-    data=parse_llm_json(content)
-    title=str(data.get("title","")).strip()
-    category=str(data.get("category","")).strip()
-    difficulty=str(data.get("difficulty","")).strip()
-    answer=str(data.get("answer","")).strip()
-    tags=str(data.get("tags","")).strip()
-    if not title or not category or not answer:
-        raise HTTPException(status_code=502,detail="模型未按格式返回")
-    if difficulty not in ("简单","中等","困难"):
-        difficulty="简单"
     db=SessionLocal()
-    question=Question(title=title,category=category,difficulty=difficulty,answer=answer,tags=tags)
-    db.add(question)
     try:
-        db.commit()
-    except IntegrityError:
-        db.rollback()
+        # 最多尝试 3 次：每次把题库已有题目标题注入提示词要求换角度，
+        # 若生成的标题撞上「题目全局唯一」约束则回滚重试，3 次都撞才报错
+        for attempt in range(3):
+            existing=[row[0] for row in db.query(Question.title).all()]
+            avoid=(
+                "请注意：这道题不能与题库中已有的题目重复，题库已有题目的标题如下："
+                +("、".join(existing) if existing else "（暂无）")
+                +"。请选择一个不同的考察角度出题。"
+            )
+            prompt=(
+                "你是一名面试出题官，请根据下面的要求出一道面试题。"
+                "只输出 JSON，不要输出任何其他文字，格式为："
+                '{"title":"题目标题","category":"分类","difficulty":"简单或中等或困难","answer":"参考答案","tags":"标签1,标签2"}。'
+                "出题要求："+q.topic+"\n"+avoid
+            )
+            content=call_llm([{"role":"user","content":prompt}])
+            data=parse_llm_json(content)
+            title=str(data.get("title","")).strip()
+            category=str(data.get("category","")).strip()
+            difficulty=str(data.get("difficulty","")).strip()
+            answer=str(data.get("answer","")).strip()
+            tags=str(data.get("tags","")).strip()
+            if not title or not category or not answer:
+                raise HTTPException(status_code=502,detail="模型未按格式返回")
+            if difficulty not in ("简单","中等","困难"):
+                difficulty="简单"
+            question=Question(title=title,category=category,difficulty=difficulty,answer=answer,tags=tags)
+            db.add(question)
+            try:
+                db.commit()
+            except IntegrityError:
+                db.rollback()
+                if attempt<2:
+                    continue
+                raise HTTPException(status_code=409,detail="连续三次生成的题目都与题库重复，请换个出题方向再试")
+            question_id=question.id
+            sync_question_vector(question_id,question_text(title,category,answer,tags))
+            return {"ok":True,"id":question_id,"title":title,"category":category,"difficulty":difficulty,"answer":answer,"tags":tags}
+    finally:
         db.close()
-        raise HTTPException(status_code=409,detail="题目已存在")
-    question_id=question.id
-    db.close()
-    sync_question_vector(question_id,question_text(title,category,answer,tags))
-    return {"ok":True,"id":question_id,"title":title,"category":category,"difficulty":difficulty,"answer":answer,"tags":tags}
 
 # 按岗位名称+岗位描述批量生成面试题：先用向量检索从题库找相关题目做参考（RAG），再要求模型输出 JSON 数组，逐条落库，重复题目跳过不影响其余题目
 @app.post("/ask-questions")
@@ -511,6 +526,12 @@ def interview_turn_stream(i:InterviewIn):
 # 根据整场面试对话生成面试总结报告（JSON 格式）
 @app.post("/interview-summary")
 def interview_summary(i:InterviewSummaryIn):
+    # 候选人必须实际回答过至少一题才生成报告，否则模型会把空对话编造出评分与"关键点"
+    # 消息流约定：模拟面试页在开始时发送的第一条 user 消息是"面试开始"开场指令，不是回答，
+    # 因此只有出现第二条及以上的非空 user 消息，才说明候选人真正作答过
+    user_msgs=[m for m in i.messages if m.get("role")=="user" and str(m.get("content","")).strip()]
+    if len(user_msgs)<2:
+        raise HTTPException(status_code=400,detail="请至少回答一道题目后再结束面试")
     lines=[]
     for m in i.messages:
         role="候选人" if m.get("role")=="user" else "面试官"
@@ -686,7 +707,10 @@ def get_questions(response:Response,category:str="",difficulty:str="",q:str="",c
     if q:
         query=query.filter((Question.title.contains(q))|(Question.tags.contains(q)))
     if random:
+        # 组卷随机抽取：只按随机排序；其余情况固定按 id 排序，保证新题永远排在最后一页
         query=query.order_by(func.random())
+    else:
+        query=query.order_by(Question.id)
     total=query.count()
     if count>0:
         query=query.limit(count)
